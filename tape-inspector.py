@@ -2,6 +2,7 @@
 # coding: utf-8
 
 
+import sys
 import threading
 import asyncio
 import time
@@ -529,13 +530,15 @@ def process_video_file(lvideo, rvideo):
                 image_left = process_frame(
                     l_frame, l_images, is_ready, True)
 
-                if image_left is not None and image_right is not None:
-                    stack = np.hstack((image_left, image_right))
-                    cv2.imshow("LR", stack)
-                elif image_left is not None:
-                    cv2.imshow("L", image_left)
-                elif image_right is not None:
-                    cv2.imshow("R", image_right)
+                is_showing = True
+                if is_showing:
+                    if image_left is not None and image_right is not None:
+                        stack = np.hstack((image_left, image_right))
+                        cv2.imshow("LR", stack)
+                    elif image_left is not None:
+                        cv2.imshow("L", image_left)
+                    elif image_right is not None:
+                        cv2.imshow("R", image_right)
 
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     print('exit')
@@ -543,7 +546,7 @@ def process_video_file(lvideo, rvideo):
                     lcap.release()
                     rcap.release()
                     cv2.destroyAllWindows()
-                    # sock.close()
+                    sys.exit()
                     return
 
             lcap.release()
