@@ -89,9 +89,6 @@ class State:
 machine_state = State()
 
 
-# In[2]:
-
-
 def get_contours(thresh):
     # Find contours
     contours, hierarchy = cv2.findContours(
