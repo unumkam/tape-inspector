@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 # coding: utf-8
 
-
 import sys
 import threading
 import asyncio
@@ -16,6 +15,11 @@ import datetime
 import math
 import os
 import shutil
+
+ip_addr = 'localhost'
+port = 2002
+
+contours_count_limit = 3
 
 # data
 cwd = os.getcwd()
@@ -89,11 +93,11 @@ class State:
 machine_state = State()
 
 
-def get_contours(thresh):
+def get_contours(thresh, reverse_sorted):
     # Find contours
     contours, hierarchy = cv2.findContours(
         thresh, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-    contours = sorted(contours, key=cv2.contourArea, reverse=True)
+    contours = sorted(contours, key=cv2.contourArea, reverse=reverse_sorted)
     return contours
 
 
@@ -105,15 +109,6 @@ def add_contours(image, contours, color, width):
     [cv2.drawContours(img, [contours[i]], 0, color, std_width)
      for i in range(contours_count)]
     return img
-
-
-def show_contours(img, thresh, label):
-    contours = get_contours(thresh)
-    contours_count = len(contours)
-    global green_color
-    global std_width
-    img = add_contours(img, contours, green_color, std_width)
-    cv2.imshow(label, img)
 
 
 def inside_point(point, poly):
@@ -174,13 +169,13 @@ def is_protected_zone(is_left, point):
 
 
 def final(bin_for_borders_detect, diff_for_total_detect, image_for_printing, is_left, is_ready):
-    fails_contours = get_contours(diff_for_total_detect)
+    fails_contours = get_contours(diff_for_total_detect, False)
     rectangles_fails = []
     for fail_cand in fails_contours:
         x, y, w, h = cv2.boundingRect(fail_cand)
         rectangles_fails.append((x, y, w, h))
 
-    border_contours = get_contours(bin_for_borders_detect)
+    border_contours = get_contours(bin_for_borders_detect, True)
     rectangles_border = []
     for bord_cand in border_contours:
         x, y, w, h = cv2.boundingRect(bord_cand)
@@ -188,6 +183,8 @@ def final(bin_for_borders_detect, diff_for_total_detect, image_for_printing, is_
 
     detected = []
     detected_in_blocked = []
+
+    global contours_count_limit
 
     for c_i in range(len(fails_contours)):
         inside_border = False
@@ -203,6 +200,10 @@ def final(bin_for_borders_detect, diff_for_total_detect, image_for_printing, is_
             inside_border = True
 
         for b_i in range(len(border_contours)):
+
+            if len(detected) > 5*contours_count_limit:
+                break
+
             if inside_border or above_border:
                 break
             rect_border = rectangles_border[b_i]
@@ -220,6 +221,7 @@ def final(bin_for_borders_detect, diff_for_total_detect, image_for_printing, is_
                 if inside and above:
                     above_border = True
                     break
+
             if not inside_border and not above_border:
                 detected.append([])
                 detected[len(detected)-1] = fails_contours[c_i]
@@ -242,10 +244,10 @@ def final(bin_for_borders_detect, diff_for_total_detect, image_for_printing, is_
 
     global machine_state
     if is_ready:
-        if is_left and len(ans) > 3:
+        if is_left and len(ans) > contours_count_limit:
             machine_state.detect_on_left()
 
-        if not is_left and len(ans) > 3:
+        if not is_left and len(ans) > contours_count_limit:
             machine_state.detect_on_right()
 
     image_for_printing = add_contours(image_for_printing, ans, red_color, 3)
@@ -281,9 +283,6 @@ def final(bin_for_borders_detect, diff_for_total_detect, image_for_printing, is_
     return image_for_printing
 
 
-# In[3]:
-
-
 def get_diff_image(images):
     # im_t is the frame of interest; im_tp1 and im_tm1 are, respectively
     # the successive and previous frames.
@@ -291,10 +290,6 @@ def get_diff_image(images):
     db0 = cv2.absdiff(images[2], images[0])
     dbm = cv2.absdiff(images[1], images[2])
     return cv2.bitwise_not(cv2.bitwise_and(cv2.bitwise_and(dbp, dbm), cv2.bitwise_not(db0)))
-
-
-def plot_average_contours(image, contour_source):
-    show_contours(image, contour_source, "Contour")
 
 
 def process_average(frame, draw_image, is_left):
@@ -320,7 +315,7 @@ def process_average(frame, draw_image, is_left):
                 dst = cv2.addWeighted(average_images[i], alpha, dst, beta, 0.0)
         ret, binarizedImage = cv2.threshold(dst, 70, 255, cv2.THRESH_TOZERO)
 
-        main_contours = get_contours(binarizedImage)
+        main_contours = get_contours(binarizedImage, True)
         LX = 1280
         LY = 0
 
@@ -375,21 +370,12 @@ def process_frame(frame, images, is_ready, is_left):
         diff_image = get_diff_image(images)
         r, binarized_diff = cv2.threshold(
             diff_image, 215, 255, cv2.THRESH_TOZERO_INV)
-        # cv2.imshow('Binarized Diff',binarized_diff)
-        # label = ("L Color","R Color")[not is_left]
-        # show_contours(frame,binarized_diff,label)
-        binarizedImage = binarized_diff
         if av_img is not None:
             return final(av_img, binarized_diff, color_img.copy(), is_left, is_ready)
 
     return None
 
 
-# In[4]:
-
-
-ip_addr = 'localhost'
-port = 2002
 screenFlipper = False
 msg = '!{0}"{1}"{2}"{3}"{4}"{5}"{6}"{7}"'
 
@@ -469,57 +455,75 @@ def loop_in_thread(loop):
     loop.run_forever()
 
 
+def get_captures(lvideo, rvideo, machine_state):
+    lcap = cv2.VideoCapture(lvideo)
+    rcap = cv2.VideoCapture(rvideo)
+    lcap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+    lcap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+    rcap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+    rcap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+
+    if not lcap.isOpened():
+        machine_state.working = False
+        machine_state.l_enabled = False
+
+    if not rcap.isOpened():
+        machine_state.working = False
+        machine_state.l_enabled = False
+
+    return lcap, rcap
+
+
+def get_frames(lcap, rcap, machine_state):
+    l_ret, l_frame = lcap.read()
+    r_ret, r_frame = rcap.read()
+    if l_ret == False or r_ret == False:
+        machine_state.l_enabled = l_ret
+        machine_state.r_enabled = r_ret
+        machine_state.working = False
+        machine_state.stable = False
+    return l_frame, r_frame
+
+
+def show_image(image_left, image_right):
+    if image_left is not None and image_right is not None:
+        stack = np.hstack((image_left, image_right))
+        cv2.imshow("LR", stack)
+    elif image_left is not None:
+        cv2.imshow("L", image_left)
+    elif image_right is not None:
+        cv2.imshow("R", image_right)
+
+
+def release_resources(lcap, rcap):
+    lcap.release()
+    rcap.release()
+    cv2.destroyAllWindows()
+
+
 def process_video_file(lvideo, rvideo):
     while(True):
         try:
             global machine_state
+            # Prepare for first report
             CreateMessage(machine_state)
-            # start server
 
             loop = asyncio.get_event_loop()
             loop.create_task(asyncio.start_server(
                 handle_client, ip_addr, port))
-
             thread = threading.Thread(target=loop_in_thread, args=(loop,))
             thread.start()
 
-            ###
+            lcap, rcap = get_captures(lvideo, rvideo, machine_state)
+            focus_delay_timer = timer()
+            l_images, r_images = [], []
 
-            start = timer()
-
-            lcap = cv2.VideoCapture(lvideo)
-            rcap = cv2.VideoCapture(rvideo)
-            lcap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-            lcap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-            rcap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-            rcap.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-
-            if not lcap.isOpened():
-                machine_state.working = False
-                machine_state.l_enabled = False
-
-            if not rcap.isOpened():
-                machine_state.working = False
-                machine_state.l_enabled = False
-
-            l_images = []
-            r_images = []
-
-            counter = 0
             while(lcap.isOpened() and rcap.isOpened()):
                 CreateMessage(machine_state)
-                counter = counter + 1
-                if counter > 5:
-                    counter = 0
-                    # SocketHandle(sock)
-                l_ret, l_frame = lcap.read()
-                r_ret, r_frame = rcap.read()
-                if l_ret == False or r_ret == False:
-                    machine_state.l_enabled = l_ret
-                    machine_state.r_enabled = r_ret
-                    machine_state.working = False
-                    machine_state.stable = False
-                is_ready = timer() - start > turn_on_delay
+
+                l_frame, r_frame = get_frames(lcap, rcap, machine_state)
+
+                is_ready = timer() - focus_delay_timer > turn_on_delay
                 machine_state.stable = is_ready
 
                 image_right = process_frame(
@@ -527,31 +531,17 @@ def process_video_file(lvideo, rvideo):
                 image_left = process_frame(
                     l_frame, l_images, is_ready, True)
 
-                is_showing = True
-                if is_showing:
-                    if image_left is not None and image_right is not None:
-                        stack = np.hstack((image_left, image_right))
-                        cv2.imshow("LR", stack)
-                    elif image_left is not None:
-                        cv2.imshow("L", image_left)
-                    elif image_right is not None:
-                        cv2.imshow("R", image_right)
+                show_image(image_left, image_right)
 
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     print('exit')
-                    # When everything done, release the video capture object
-                    lcap.release()
-                    rcap.release()
-                    cv2.destroyAllWindows()
+                    release_resources(lcap, rcap)
                     sys.exit()
                     return
 
-            lcap.release()
-            rcap.release()
-            cv2.destroyAllWindows()
-            # sock.close()
+            release_resources(lcap, rcap)
             clear_output(wait=True)
-            print("Server stopped due to disconnect, restarting")
+            print("Server restarting")
         except Exception as e:
 
             time.sleep(1)
