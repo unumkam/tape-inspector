@@ -21,6 +21,7 @@ port = 2002
 left_cam_index = 0
 right_cam_index = 1
 contours_count_limit = 3
+plotting = True
 
 # data
 cwd = os.getcwd()
@@ -30,9 +31,10 @@ good_video = examples_dir + "good.wmv"
 right_video = examples_dir + "rgood.wmv"
 
 
-# ip_addr = 'localhost'
-# left_cam_index = bad_video
-# right_cam_index = right_video
+#ip_addr = 'localhost'
+#left_cam_index = bad_video
+#right_cam_index = right_video
+#plotting = False
 
 # settings
 turn_on_delay = 5
@@ -549,7 +551,9 @@ def process_video_file(lvideo, rvideo):
                 image_left = process_frame(
                     l_frame, l_images, is_ready, True)
 
-                show_image(image_left, image_right)
+                global plotting
+                if plotting:
+	                show_image(image_left, image_right)
 
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     print('exit')
