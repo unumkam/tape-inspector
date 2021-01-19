@@ -16,9 +16,10 @@ import math
 import os
 import shutil
 
-ip_addr = 'localhost'
+ip_addr = '192.168.0.20'
 port = 2002
-
+left_cam_index = 0
+right_cam_index = 1
 contours_count_limit = 3
 
 # data
@@ -27,10 +28,15 @@ examples_dir = cwd + "//video//"
 bad_video = examples_dir + "bad.wmv"
 good_video = examples_dir + "good.wmv"
 right_video = examples_dir + "rgood.wmv"
+
+
+# ip_addr = 'localhost'
+# left_cam_index = bad_video
+# right_cam_index = right_video
+
 # settings
 turn_on_delay = 5
 
-local_run = True
 
 # Average for lamps detector
 average_frame_limit = 8
@@ -168,23 +174,10 @@ def is_protected_zone(is_left, point):
     return False
 
 
-def final(bin_for_borders_detect, diff_for_total_detect, image_for_printing, is_left, is_ready):
-    fails_contours = get_contours(diff_for_total_detect, False)
-    rectangles_fails = []
-    for fail_cand in fails_contours:
-        x, y, w, h = cv2.boundingRect(fail_cand)
-        rectangles_fails.append((x, y, w, h))
-
-    border_contours = get_contours(bin_for_borders_detect, True)
-    rectangles_border = []
-    for bord_cand in border_contours:
-        x, y, w, h = cv2.boundingRect(bord_cand)
-        rectangles_border.append((x, y, w, h))
+def split_points(fails_contours, rectangles_fails, border_contours, rectangles_border, is_left):
 
     detected = []
     detected_in_blocked = []
-
-    global contours_count_limit
 
     for c_i in range(len(fails_contours)):
         inside_border = False
@@ -230,8 +223,33 @@ def final(bin_for_borders_detect, diff_for_total_detect, image_for_printing, is_
                 detected_in_blocked[len(
                     detected_in_blocked)-1] = fails_contours[c_i]
 
+    return detected, detected_in_blocked
+
+
+def final(bin_for_borders_detect, diff_for_total_detect, image_for_printing, is_left, is_ready):
+    fails_contours = get_contours(diff_for_total_detect, False)
+    rectangles_fails = []
+    for fail_cand in fails_contours:
+        x, y, w, h = cv2.boundingRect(fail_cand)
+        rectangles_fails.append((x, y, w, h))
+
+    border_contours = get_contours(bin_for_borders_detect, True)
+    rectangles_border = []
+    for bord_cand in border_contours:
+        x, y, w, h = cv2.boundingRect(bord_cand)
+        rectangles_border.append((x, y, w, h))
+
+    detected = []
+    detected_in_blocked = []
+
+    global contours_count_limit
+
+    detected, detected_in_blocked = split_points(
+        fails_contours, rectangles_fails, border_contours, rectangles_border, is_left)
+
     global red_color
     global yellow_color
+
     ans = []
     for i in range(len(detected)):
         contour = detected[i]
@@ -549,4 +567,4 @@ def process_video_file(lvideo, rvideo):
             pass
 
 
-process_video_file(bad_video, right_video)
+process_video_file(left_cam_index, right_cam_index)
