@@ -18,10 +18,13 @@ import shutil
 
 ip_addr = '192.168.0.20'
 port = 2002
-left_cam_index = 0
-right_cam_index = 1
+left_cam_index = 1
+right_cam_index = 0
 contours_count_limit = 3
 plotting = True
+
+conn = None
+addr = None
 
 # data
 cwd = os.getcwd()
@@ -31,10 +34,10 @@ good_video = examples_dir + "good.wmv"
 right_video = examples_dir + "rgood.wmv"
 
 
-#ip_addr = 'localhost'
-#left_cam_index = bad_video
-#right_cam_index = right_video
-#plotting = False
+ip_addr = '192.168.0.2'
+left_cam_index = bad_video
+right_cam_index = right_video
+# plotting = False
 
 # settings
 turn_on_delay = 5
@@ -80,8 +83,21 @@ class State:
         self.l_enabled = False
         self.r_count = 0
         self.r_enabled = False
+        self.activated_count_l = 0
+        self.activated_count_r = 0
+        self.activated_max = 3
+
+    def lost_detect(self, is_left):
+        if is_left:
+            self.activated_count_l = 0
+        else:
+            self.activated_count_r = 0
 
     def detect_on_left(self):
+        self.activated_count_l = self.activated_count_l + 1
+        if self.activated_count_l < self.activated_max:
+            return
+        self.activated_count_l = 0
         if self.detected:
             return
         self.detected = True
@@ -90,6 +106,10 @@ class State:
             self.l_count = 0
 
     def detect_on_right(self):
+        self.activated_count_r = self.activated_count_r + 1
+        if self.activated_count_r < self.activated_max:
+            return
+        self.activated_count_r = 0
         if self.detected:
             return
         self.detected = True
@@ -114,7 +134,7 @@ def add_contours(image, contours, color, width):
     contours_count = len(contours)
     global green_color
     global std_width
-    [cv2.drawContours(img, [contours[i]], 0, color, std_width)
+    [cv2.drawContours(img, [contours[i]], 0, color, width)
      for i in range(contours_count)]
     return img
 
@@ -263,11 +283,16 @@ def final(bin_for_borders_detect, diff_for_total_detect, image_for_printing, is_
         ans2.append(contour)
 
     global machine_state
-    if is_ready:
-        if is_left and len(ans) > contours_count_limit:
-            machine_state.detect_on_left()
 
-        if not is_left and len(ans) > contours_count_limit:
+    if is_ready:
+
+        pre_res = len(ans) > contours_count_limit
+
+        if not pre_res:
+            machine_state.lost_detect(is_left)
+        if is_left and pre_res:
+            machine_state.detect_on_left()
+        if not is_left and pre_res:
             machine_state.detect_on_right()
 
     image_for_printing = add_contours(image_for_printing, ans, red_color, 3)
@@ -363,7 +388,7 @@ def process_average(frame, draw_image, is_left):
             RIGHT_FILTER_Y = RY
 
         kernel = np.ones((8, 8), np.uint8)
-        erosion = cv2.dilate(binarizedImage, kernel, iterations=15)
+        erosion = cv2.dilate(binarizedImage, kernel, iterations=18)
         ret = erosion
     if len(average_images) >= average_images_limit:
         average_images.pop(0)
@@ -411,11 +436,12 @@ def CreateMessage(state):
     msg_copy = msg
     errorFound = int(state.working)
     isWorking = int(state.stable)
-    flipping = int(state.blink)
 
-    state.blink = not state.blink
     detected = int(state.detected)
-    state.detected = False
+    if not message_ready:
+        state.blink = not state.blink
+        message_ready = True
+    flipping = int(state.blink)
     l_count = str(state.l_count).zfill(3)
     l_working = int(state.l_enabled)
     r_count = str(state.r_count).zfill(3)
@@ -423,14 +449,10 @@ def CreateMessage(state):
 
     state.r_detected = int(False)
     state.l_detected = int(False)
-
-    possibility = str(random.randint(0, 100)).zfill(3)
-    size = str(random.randint(0, 999)).zfill(3)
     msg_copy = msg_copy.format(
         errorFound, isWorking, flipping, detected, l_count, l_working, r_count, r_working)
 
     message_text = msg_copy
-    message_ready = True
 
     return msg_copy.encode()
 
@@ -452,27 +474,40 @@ def CreateRandomMessage():
     return msg_copy.encode()
 
 
-async def handle_client(reader, writer):
-    print("New Client")
+def SocketCycle(conn):
+    global message_max_length
+    # data = conn.recv(message_max_length)
+    global machine_state
     global message_ready
-    global message_text
+    conn.send(CreateMessage(machine_state))
+    machine_state.detected = False
+    message_ready = False
 
-    # return
-    while True:
+
+def SocketHandle(sock):
+    global port
+    global conn
+    global addr
+    if conn is not None and addr is not None:
         try:
-            if message_ready:
-                writer.write(message_text.encode('utf8'))
-                await writer.drain()
-                message_ready = False
-            time.sleep(0.1)
-        except Exception as e:
-            print(e)
-            return
-
-
-def loop_in_thread(loop):
-    asyncio.set_event_loop(loop)
-    loop.run_forever()
+            SocketCycle(conn)
+        except:
+            conn = None
+            addr = None
+            pass
+    else:
+        try:
+            print('wait')
+            sock.listen(1)
+            x, y = sock.accept()
+            sock.settimeout(0.4)
+            print('Server started')
+            conn = x
+            addr = y
+        except:
+            conn = None
+            addr = None
+            pass
 
 
 def get_captures(lvideo, rvideo, machine_state):
@@ -508,16 +543,20 @@ def get_frames(lcap, rcap, machine_state):
 def show_image(image_left, image_right):
     if image_left is not None and image_right is not None:
         stack = np.hstack((image_left, image_right))
+        # suits for image containing any amount of channels
+        w, h = stack.shape[:2]
+        resize_factor = 1.6
+        w = int(w / resize_factor)  # one must compute beforehand
+        h = int(h / resize_factor)  # and convert to INT
+        # use variables defined/computed BEFOREHAND
+        stack = cv2.resize(stack, (h, w))
         cv2.imshow("LR", stack)
-    elif image_left is not None:
-        cv2.imshow("L", image_left)
-    elif image_right is not None:
-        cv2.imshow("R", image_right)
 
 
 def release_resources(lcap, rcap):
     lcap.release()
     rcap.release()
+    sock.close()
     cv2.destroyAllWindows()
 
 
@@ -528,18 +567,16 @@ def process_video_file(lvideo, rvideo):
             # Prepare for first report
             CreateMessage(machine_state)
 
-            loop = asyncio.get_event_loop()
-            loop.create_task(asyncio.start_server(
-                handle_client, ip_addr, port))
-            thread = threading.Thread(target=loop_in_thread, args=(loop,))
-            thread.start()
+            sock = socket.socket()
+            sock.bind((ip_addr, port))
 
             lcap, rcap = get_captures(lvideo, rvideo, machine_state)
             focus_delay_timer = timer()
             l_images, r_images = [], []
-
+            counter = 0
             while(lcap.isOpened() and rcap.isOpened()):
                 CreateMessage(machine_state)
+                SocketHandle(sock)
 
                 l_frame, r_frame = get_frames(lcap, rcap, machine_state)
 
@@ -553,7 +590,7 @@ def process_video_file(lvideo, rvideo):
 
                 global plotting
                 if plotting:
-	                show_image(image_left, image_right)
+                    show_image(image_left, image_right)
 
                 if cv2.waitKey(1) & 0xFF == ord('q'):
                     print('exit')

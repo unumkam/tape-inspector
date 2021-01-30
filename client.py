@@ -35,7 +35,7 @@ def clear():
 
 print(isnotebook())
 sock = socket.socket()
-sock.connect(('localhost', 2002))
+sock.connect(('192.168.0.2', 2002))
 for i in range(0,100000):
     print('->')
     #sock.send(b'hello, world!')
