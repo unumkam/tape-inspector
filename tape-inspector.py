@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 # coding: utf-8
 
+from statistics import mean
 import sys
 import threading
 import asyncio
@@ -29,7 +30,8 @@ addr = None
 # data
 cwd = os.getcwd()
 examples_dir = cwd + "//video//"
-bad_video = examples_dir + "bad.wmv"
+bad_video = examples_dir + "N1.wmv"
+bad_video = examples_dir + "bad_new0.wmv"
 good_video = examples_dir + "good.wmv"
 right_video = examples_dir + "rgood.wmv"
 
@@ -53,6 +55,9 @@ index_for_averaging = 0
 green_color = (0, 255, 0)
 red_color = (0, 0, 255)
 yellow_color = (0, 255, 255)
+purple_color = (255, 0, 255)
+orange_color = (0, 165, 255)
+blue_color = (255, 0, 0)
 std_width = 1
 
 
@@ -60,7 +65,7 @@ std_width = 1
 LEFT_FILTER_X = None
 LEFT_FILTER_Y = None
 
-LEFT_ANGLE = 1.67
+LEFT_ANGLE = 1.87
 RIGHT_ANGLE = -1.87
 
 LEFT_K = None
@@ -71,6 +76,12 @@ RIGHT_FILTER_Y = None
 
 RIGHT_K = None
 RIGHT_B = None
+
+
+LFactor = []
+RFactor = []
+MeanL = 3
+MinSize = 10
 
 
 class State:
@@ -147,7 +158,7 @@ def inside_point(point, poly):
         return False
 
 
-def add_line(publish, is_left, image, l_point, l_angle, color, width):
+def get_k_and_b(l_point, l_angle):
     if l_point[0] == 0:
         l_point = (1, l_point[1])
     if l_point[1] == 0:
@@ -156,22 +167,29 @@ def add_line(publish, is_left, image, l_point, l_angle, color, width):
     # y = kx + b
     k = math.tan(l_angle)
     b = l_point[1] - (k*l_point[0])
-    x1 = int((720 - b)/k)
-    y1 = 720
-    x2 = int((0 - b)/k)
-    y2 = 0
+    return k, b
+
+
+def publish_line_params(is_left, l_point, l_angle):
+    k, b = get_k_and_b(l_point, l_angle)
+
+    if is_left:
+        global LEFT_K
+        global LEFT_B
+        LEFT_K = k
+        LEFT_B = b
+    else:
+        global RIGHT_K
+        global RIGHT_B
+        RIGHT_K = k
+        RIGHT_B = b
+
+
+def add_line(image, l_point, l_angle, color, width):
+    k, b = get_k_and_b(l_point, l_angle)
+    x1, y1 = int((720 - b)/k), 720
+    x2, y2 = int((0 - b)/k), 0
     cv2.line(image, (x1, y1), (x2, y2), color, width)
-    if publish:
-        if is_left:
-            global LEFT_K
-            global LEFT_B
-            LEFT_K = k
-            LEFT_B = b
-        else:
-            global RIGHT_K
-            global RIGHT_B
-            RIGHT_K = k
-            RIGHT_B = b
 
 
 def is_protected_zone(is_left, point):
@@ -196,7 +214,10 @@ def is_protected_zone(is_left, point):
     return False
 
 
-def split_points(fails_contours, rectangles_fails, border_contours, rectangles_border, is_left):
+def split_points_special(fails_contours, rectangles_fails, border_contours, rectangles_border, is_left):
+
+    global contours_count_limit
+    cutoff = 5*contours_count_limit
 
     detected = []
     detected_in_blocked = []
@@ -213,6 +234,60 @@ def split_points(fails_contours, rectangles_fails, border_contours, rectangles_b
         protected_check_point = (points_cand[0], points_cand[3])[not is_left]
         if is_protected_zone(is_left, protected_check_point):
             inside_border = True
+
+        for b_i in range(len(border_contours)):
+
+            if inside_border or above_border:
+                break
+            rect_border = rectangles_border[b_i]
+
+            for i in range(4):
+                P = points_cand[i]
+                (X, Y) = (P[0], P[1])
+
+                if inside_point(P, border_contours[b_i]):
+                    inside_border = True
+                    break
+                inside = (X > rect_border[0]) and (
+                    X < rect_border[0] + rect_border[2])
+                above = Y < rect_border[1]
+                if inside and above:
+                    above_border = True
+                    break
+
+            if inside_border and not above_border:
+                detected.append([])
+                detected[len(detected)-1] = fails_contours[c_i]
+
+                if len(detected) > cutoff:
+                    break
+            else:
+                detected_in_blocked.append([])
+                detected_in_blocked[len(
+                    detected_in_blocked)-1] = fails_contours[c_i]
+
+    return detected, detected_in_blocked
+
+
+def split_points(fails_contours, rectangles_fails, border_contours, rectangles_border, is_left):
+
+    global contours_count_limit
+    detected = []
+    detected_in_blocked = []
+
+    for c_i in range(len(fails_contours)):
+        inside_border = False
+        above_border = False
+        on_tape = False
+
+        R = rectangles_fails[c_i]
+        (x, y, w, h) = (R[0], R[1], R[2], R[3])
+        points_cand = [(x, y), (x+w, y),
+                       (x, y+h), (x+w, y+h)]
+
+        protected_check_point = (points_cand[0], points_cand[3])[not is_left]
+        if is_protected_zone(is_left, protected_check_point):
+            on_tape = True
 
         for b_i in range(len(border_contours)):
 
@@ -237,7 +312,7 @@ def split_points(fails_contours, rectangles_fails, border_contours, rectangles_b
                     above_border = True
                     break
 
-            if not inside_border and not above_border:
+            if not inside_border and not above_border and not on_tape:
                 detected.append([])
                 detected[len(detected)-1] = fails_contours[c_i]
             else:
@@ -248,7 +323,135 @@ def split_points(fails_contours, rectangles_fails, border_contours, rectangles_b
     return detected, detected_in_blocked
 
 
+def add_filter_lines(is_left, image_for_printing):
+
+    global blue_color
+    global orange_color
+
+    global LEFT_FILTER_X
+    global LEFT_FILTER_Y
+    global LEFT_ANGLE
+
+    global RIGHT_FILTER_X
+    global RIGHT_FILTER_Y
+    global RIGHT_ANGLE
+
+    line_filter_x = (LEFT_FILTER_X, RIGHT_FILTER_X)[not is_left]
+    line_filter_y = (LEFT_FILTER_Y, RIGHT_FILTER_Y)[not is_left]
+    line_ang = (LEFT_ANGLE, RIGHT_ANGLE)[not is_left]
+
+    diff_1 = (40, -40)[not is_left]
+    diff_2 = (-90, -90)[not is_left]
+
+    if line_filter_x is None:
+        return image_for_printing
+
+    add_line(image_for_printing, (line_filter_x + diff_1,
+                                  line_filter_y), line_ang, orange_color, 3)
+    add_line(image_for_printing, (line_filter_x + diff_2,
+                                  line_filter_y), line_ang, blue_color, 1)
+    add_line(image_for_printing, (line_filter_x,
+                                  line_filter_y), line_ang, blue_color, 1)
+
+    return image_for_printing
+
+
+# bin_for_borders_detect - average
+# diff_for_total_detect - binarized
+
+arr_len3 = []
+arr_len10 = []
+
+
+def make_decision_and_report_special(image, border_contours, is_left, is_ready, image_for_printing):
+    artifacts = get_contours(image, False)
+    detected = []
+    detected_in_blocked = []
+
+    rectangles_border = []
+    for bord_cand in border_contours:
+        x, y, w, h = cv2.boundingRect(bord_cand)
+        rectangles_border.append((x, y, w, h))
+
+    rectangles_fails = []
+    for fail_cand in artifacts:
+        x, y, w, h = cv2.boundingRect(fail_cand)
+        rectangles_fails.append((x, y, w, h))
+
+    detected, detected_in_blocked = split_points_special(
+        artifacts, rectangles_fails, border_contours, rectangles_border, is_left)
+
+    ans = []
+    for i in range(len(detected)):
+        contour = detected[i]
+        ans.append(contour)
+
+    global machine_state
+    global contours_count_limit
+    pre_res = len(ans) > contours_count_limit
+    if not pre_res:
+        machine_state.lost_detect(is_left)
+    if is_left and pre_res:
+        machine_state.detect_on_left()
+    if not is_left and pre_res:
+        machine_state.detect_on_right()
+
+    global LFactor
+    global RFactor
+    global MeanL
+    global MinSize
+
+    amount = 0.00
+    for cnt in detected:
+        (x, y), radius = cv2.minEnclosingCircle(cnt)
+        if 2*radius > MinSize:
+            amount = amount + 1
+
+    if is_left:
+        if len(LFactor) >= MeanL:
+            LFactor.pop(0)
+        LFactor.append(amount)
+    else:
+        if len(RFactor) >= MeanL:
+            RFactor.pop(0)
+        RFactor.append(amount)
+
+    global green_color
+    global red_color
+
+    avg = 0.000001
+    if is_left:
+        avg = mean(LFactor)
+    else:
+        avg = mean(RFactor)
+
+    label = "OK,   "+"{:.3f}".format(avg)
+    color = green_color
+    if avg > 3:
+        color = red_color
+        label = "BAD,  "+"{:.3f}".format(avg)
+
+    cv2.circle(image_for_printing, (700, 500), MinSize, color, -1)
+    cv2.putText(image_for_printing, label,
+                (700, 550), cv2.FONT_HERSHEY_PLAIN, 1.0, color, 2)
+
+    return image_for_printing
+
+
+def special_final(bin_for_borders_detect, binarized, image_for_printing, is_left, is_ready):
+
+    global purple_color
+    global orange_color
+    border_contours = get_contours(bin_for_borders_detect, True)
+    image = add_contours(image_for_printing, border_contours, purple_color, 5)
+    image = add_filter_lines(is_left, image)
+    image = make_decision_and_report_special(
+        binarized, border_contours, is_left, is_ready, image)
+    return image
+
+
 def final(bin_for_borders_detect, diff_for_total_detect, image_for_printing, is_left, is_ready):
+
     fails_contours = get_contours(diff_for_total_detect, False)
     rectangles_fails = []
     for fail_cand in fails_contours:
@@ -264,13 +467,8 @@ def final(bin_for_borders_detect, diff_for_total_detect, image_for_printing, is_
     detected = []
     detected_in_blocked = []
 
-    global contours_count_limit
-
     detected, detected_in_blocked = split_points(
         fails_contours, rectangles_fails, border_contours, rectangles_border, is_left)
-
-    global red_color
-    global yellow_color
 
     ans = []
     for i in range(len(detected)):
@@ -282,18 +480,16 @@ def final(bin_for_borders_detect, diff_for_total_detect, image_for_printing, is_
         contour = detected_in_blocked[i]
         ans2.append(contour)
 
-    global machine_state
-
     if is_ready:
+        make_decision_and_report(ans, is_left)
 
-        pre_res = len(ans) > contours_count_limit
+    return calculate_image_for_printing(is_left, image_for_printing, border_contours, ans, ans2)
 
-        if not pre_res:
-            machine_state.lost_detect(is_left)
-        if is_left and pre_res:
-            machine_state.detect_on_left()
-        if not is_left and pre_res:
-            machine_state.detect_on_right()
+
+def calculate_image_for_printing(is_left, image_for_printing, border_contours, ans, ans2):
+
+    global red_color
+    global yellow_color
 
     image_for_printing = add_contours(image_for_printing, ans, red_color, 3)
     image_for_printing = add_contours(
@@ -306,26 +502,43 @@ def final(bin_for_borders_detect, diff_for_total_detect, image_for_printing, is_
         global LEFT_FILTER_Y
         global LEFT_ANGLE
         if LEFT_FILTER_X is not None:
-            add_line(False, is_left,  image_for_printing,
+            add_line(image_for_printing,
                      (LEFT_FILTER_X, LEFT_FILTER_Y), LEFT_ANGLE, yellow_color, 1)
-            add_line(True, is_left, image_for_printing, (LEFT_FILTER_X +
-                                                         40, LEFT_FILTER_Y), LEFT_ANGLE, yellow_color, 1)
-            add_line(False, is_left,  image_for_printing,
+            add_line(image_for_printing, (LEFT_FILTER_X +
+                                          40, LEFT_FILTER_Y), LEFT_ANGLE, yellow_color, 1)
+
+            publish_line_params(
+                is_left, (LEFT_FILTER_X + 40, LEFT_FILTER_Y), LEFT_ANGLE)
+            add_line(image_for_printing,
                      (LEFT_FILTER_X-90, LEFT_FILTER_Y), LEFT_ANGLE, yellow_color, 1)
     else:
         global RIGHT_FILTER_X
         global RIGHT_FILTER_Y
         global RIGHT_ANGLE
         if RIGHT_FILTER_X is not None:
-            add_line(False,  is_left, image_for_printing, (RIGHT_FILTER_X,
-                                                           RIGHT_FILTER_Y), RIGHT_ANGLE, yellow_color, 1)
-            add_line(True, is_left, image_for_printing, (RIGHT_FILTER_X -
-                                                         40, RIGHT_FILTER_Y), RIGHT_ANGLE, yellow_color, 1)
-            add_line(False, is_left,  image_for_printing, (RIGHT_FILTER_X +
-                                                           90, RIGHT_FILTER_Y), RIGHT_ANGLE, yellow_color, 1)
+            add_line(image_for_printing, (RIGHT_FILTER_X,
+                                          RIGHT_FILTER_Y), RIGHT_ANGLE, yellow_color, 1)
+            add_line(image_for_printing, (RIGHT_FILTER_X -
+                                          40, RIGHT_FILTER_Y), RIGHT_ANGLE, yellow_color, 1)
 
-    label = ("L Main", "R Main")[not is_left]
+            publish_line_params(
+                is_left, (RIGHT_FILTER_X - 40, RIGHT_FILTER_Y), RIGHT_ANGLE)
+            add_line(image_for_printing, (RIGHT_FILTER_X +
+                                          90, RIGHT_FILTER_Y), RIGHT_ANGLE, yellow_color, 1)
+
     return image_for_printing
+
+
+def make_decision_and_report(ans, is_left):
+    global machine_state
+    global contours_count_limit
+    pre_res = len(ans) > contours_count_limit
+    if not pre_res:
+        machine_state.lost_detect(is_left)
+    if is_left and pre_res:
+        machine_state.detect_on_left()
+    if not is_left and pre_res:
+        machine_state.detect_on_right()
 
 
 def get_diff_image(images):
@@ -335,6 +548,43 @@ def get_diff_image(images):
     db0 = cv2.absdiff(images[2], images[0])
     dbm = cv2.absdiff(images[1], images[2])
     return cv2.bitwise_not(cv2.bitwise_and(cv2.bitwise_and(dbp, dbm), cv2.bitwise_not(db0)))
+
+
+def find_incline(main_contours, is_left):
+    LX, LY = 1280, 720
+    RX, RY = 0, 0
+
+    if is_left:
+        for cnt in main_contours:
+            for pnt in cnt:
+                if LX > pnt[0][0]:
+                    LX = pnt[0][0]
+                    LY = pnt[0][1]
+                elif LX == pnt[0][0]:
+                    if pnt[0][1] < LY:
+                        LX = pnt[0][0]
+                        LY = pnt[0][1]
+
+    if not is_left:
+        for cnt in main_contours:
+            for pnt in cnt:
+                if RX < pnt[0][0]:
+                    RX = pnt[0][0]
+                    RY = pnt[0][1]
+                elif RX == pnt[0][0] and pnt[0][1] < RY:
+                    RX = pnt[0][0]
+                    RY = pnt[0][1]
+
+    if is_left and LX != 1280:
+        global LEFT_FILTER_X
+        LEFT_FILTER_X = LX
+        global LEFT_FILTER_Y
+        LEFT_FILTER_Y = LY
+    if not is_left and RX != 0:
+        global RIGHT_FILTER_X
+        RIGHT_FILTER_X = RX
+        global RIGHT_FILTER_Y
+        RIGHT_FILTER_Y = RY
 
 
 def process_average(frame, draw_image, is_left):
@@ -361,31 +611,8 @@ def process_average(frame, draw_image, is_left):
         ret, binarizedImage = cv2.threshold(dst, 70, 255, cv2.THRESH_TOZERO)
 
         main_contours = get_contours(binarizedImage, True)
-        LX = 1280
-        LY = 0
 
-        RX = 0
-        LY = 0
-
-        for cnt in main_contours:
-            for pnt in cnt:
-                if is_left and LX > pnt[0][0]:
-                    LX = pnt[0][0]
-                    LY = pnt[0][1]
-                if not is_left and RX < pnt[0][0]:
-                    RX = pnt[0][0]
-                    RY = pnt[0][1]
-
-        if is_left and LX != 1280:
-            global LEFT_FILTER_X
-            LEFT_FILTER_X = LX
-            global LEFT_FILTER_Y
-            LEFT_FILTER_Y = LY
-        if not is_left and RX != 0:
-            global RIGHT_FILTER_X
-            RIGHT_FILTER_X = RX
-            global RIGHT_FILTER_Y
-            RIGHT_FILTER_Y = RY
+        find_incline(main_contours, is_left)
 
         kernel = np.ones((8, 8), np.uint8)
         erosion = cv2.dilate(binarizedImage, kernel, iterations=18)
@@ -416,7 +643,8 @@ def process_frame(frame, images, is_ready, is_left):
         r, binarized_diff = cv2.threshold(
             diff_image, 215, 255, cv2.THRESH_TOZERO_INV)
         if av_img is not None:
-            return final(av_img, binarized_diff, color_img.copy(), is_left, is_ready)
+            return special_final(av_img, binarizedImage,
+                                 color_img.copy(), is_left, is_ready)
 
     return None
 
@@ -545,7 +773,8 @@ def show_image(image_left, image_right):
         stack = np.hstack((image_left, image_right))
         # suits for image containing any amount of channels
         w, h = stack.shape[:2]
-        resize_factor = 1.6
+        #resize_factor = 1.6
+        resize_factor = 0.9
         w = int(w / resize_factor)  # one must compute beforehand
         h = int(h / resize_factor)  # and convert to INT
         # use variables defined/computed BEFOREHAND
@@ -579,6 +808,9 @@ def process_video_file(lvideo, rvideo):
                 SocketHandle(sock)
 
                 l_frame, r_frame = get_frames(lcap, rcap, machine_state)
+
+                if l_frame is None or r_frame is None:
+                    print("Some is none")
 
                 is_ready = timer() - focus_delay_timer > turn_on_delay
                 machine_state.stable = is_ready
