@@ -30,20 +30,22 @@ addr = None
 # data
 cwd = os.getcwd()
 examples_dir = cwd + "//video//"
-bad_video = examples_dir + "N1.wmv"
-bad_video = examples_dir + "bad_new0.wmv"
-good_video = examples_dir + "good.wmv"
-right_video = examples_dir + "rgood.wmv"
+left_video = examples_dir + "l_bad_new_1.wmv"
+right_video = examples_dir + "r_bad_new_0.wmv"
 
+#left_video = examples_dir + "l_bad_new_0.wmv"
+#right_video = examples_dir + "r_bad_new_0.wmv"
+
+left_video = examples_dir + "l_good_0.wmv"
+right_video = examples_dir + "r_good_0.wmv"
 
 ip_addr = '192.168.0.2'
-left_cam_index = bad_video
+left_cam_index = left_video
 right_cam_index = right_video
 # plotting = False
 
 # settings
 turn_on_delay = 5
-
 
 # Average for lamps detector
 average_frame_limit = 8
@@ -57,6 +59,7 @@ red_color = (0, 0, 255)
 yellow_color = (0, 255, 255)
 purple_color = (255, 0, 255)
 orange_color = (0, 165, 255)
+white_color = (255, 255, 255)
 blue_color = (255, 0, 0)
 std_width = 1
 
@@ -80,8 +83,20 @@ RIGHT_B = None
 
 LFactor = []
 RFactor = []
+
+LAFactor = []
+RAFactor = []
+
+SingleLimit, MultiLimit = 0.9, 19
+
 MeanL = 3
-MinSize = 10
+MinSize = 6
+
+screenFlipper = False
+msg = '!{0}"{1}"{2}"{3}"{4}"{5}"{6}"{7}"'
+
+message_ready = False
+message_text = ""
 
 
 class State:
@@ -89,14 +104,12 @@ class State:
         self.working = False
         self.stable = False
         self.blink = False
-        self.detected = False
+        self.l_detected = False
+        self.r_detected = False
         self.l_count = 0
         self.l_enabled = False
         self.r_count = 0
         self.r_enabled = False
-        self.activated_count_l = 0
-        self.activated_count_r = 0
-        self.activated_max = 3
 
     def lost_detect(self, is_left):
         if is_left:
@@ -105,25 +118,17 @@ class State:
             self.activated_count_r = 0
 
     def detect_on_left(self):
-        self.activated_count_l = self.activated_count_l + 1
-        if self.activated_count_l < self.activated_max:
+        if self.l_detected:
             return
-        self.activated_count_l = 0
-        if self.detected:
-            return
-        self.detected = True
+        self.l_detected = True
         self.l_count = self.l_count + 1
         if self.l_count > 999:
             self.l_count = 0
 
     def detect_on_right(self):
-        self.activated_count_r = self.activated_count_r + 1
-        if self.activated_count_r < self.activated_max:
+        if self.r_detected:
             return
-        self.activated_count_r = 0
-        if self.detected:
-            return
-        self.detected = True
+        self.r_detected = True
         self.r_count = self.r_count + 1
         if self.r_count > 999:
             self.r_count = 0
@@ -203,15 +208,15 @@ def is_protected_zone(is_left, point):
     k = (LEFT_K, RIGHT_K)[not is_left]
     b = (LEFT_B, RIGHT_B)[not is_left]
     if k is not None and b is not None and k != 0:
+        # y = kx + b => x^ = ( point[1] - b ) / k
         xl = point[0]
         xr = (point[1]-b)/k
 
         if is_left and xl <= xr:
-            return True
+            return False
         if not is_left and xl >= xr:
-
-            return True
-    return False
+            return False
+    return True
 
 
 def split_points_special(fails_contours, rectangles_fails, border_contours, rectangles_border, is_left):
@@ -224,21 +229,19 @@ def split_points_special(fails_contours, rectangles_fails, border_contours, rect
 
     for c_i in range(len(fails_contours)):
         inside_border = False
-        above_border = False
+        on_side = False
 
         R = rectangles_fails[c_i]
         (x, y, w, h) = (R[0], R[1], R[2], R[3])
         points_cand = [(x, y), (x+w, y),
                        (x, y+h), (x+w, y+h)]
 
-        protected_check_point = (points_cand[0], points_cand[3])[not is_left]
+        protected_check_point = (points_cand[0], points_cand[1])[not is_left]
         if is_protected_zone(is_left, protected_check_point):
-            inside_border = True
+            on_side = True
 
         for b_i in range(len(border_contours)):
 
-            if inside_border or above_border:
-                break
             rect_border = rectangles_border[b_i]
 
             for i in range(4):
@@ -251,11 +254,8 @@ def split_points_special(fails_contours, rectangles_fails, border_contours, rect
                 inside = (X > rect_border[0]) and (
                     X < rect_border[0] + rect_border[2])
                 above = Y < rect_border[1]
-                if inside and above:
-                    above_border = True
-                    break
 
-            if inside_border and not above_border:
+            if inside_border and on_side:
                 detected.append([])
                 detected[len(detected)-1] = fails_contours[c_i]
 
@@ -291,8 +291,8 @@ def split_points(fails_contours, rectangles_fails, border_contours, rectangles_b
 
         for b_i in range(len(border_contours)):
 
-            if len(detected) > 5*contours_count_limit:
-                break
+           # if len(detected) > 5*contours_count_limit:
+           #     break
 
             if inside_border or above_border:
                 break
@@ -353,14 +353,10 @@ def add_filter_lines(is_left, image_for_printing):
     add_line(image_for_printing, (line_filter_x,
                                   line_filter_y), line_ang, blue_color, 1)
 
+    publish_line_params(is_left,  (line_filter_x + diff_1,
+                                   line_filter_y), line_ang)
+
     return image_for_printing
-
-
-# bin_for_borders_detect - average
-# diff_for_total_detect - binarized
-
-arr_len3 = []
-arr_len10 = []
 
 
 def make_decision_and_report_special(image, border_contours, is_left, is_ready, image_for_printing):
@@ -386,9 +382,66 @@ def make_decision_and_report_special(image, border_contours, is_left, is_ready, 
         contour = detected[i]
         ans.append(contour)
 
+    avg, avg_all = calculate_metrics(detected, is_left)
+    report_state(avg, avg_all, is_left, is_ready)
+    image_for_printing = print_tf_reports(
+        image_for_printing, avg, avg_all, is_left)
+    return image_for_printing
+
+
+def calculate_metrics(detected, is_left):
+    global LFactor
+    global RFactor
+    global LAFactor
+    global RAFactor
+    global MeanL
+    global MinSize
+
+    amount_all = 0.00
+    amount = 0.00
+    for cnt in detected:
+        (x, y), radius = cv2.minEnclosingCircle(cnt)
+        amount_all = amount_all + 1
+        if 2*radius > MinSize:
+            amount = amount + 1
+
+    if is_left:
+        if len(LFactor) >= MeanL:
+            LFactor.pop(0)
+            LAFactor.pop(0)
+        LFactor.append(amount)
+        LAFactor.append(amount_all)
+    else:
+        if len(RFactor) >= MeanL:
+            RFactor.pop(0)
+            RAFactor.pop(0)
+        RFactor.append(amount)
+        RAFactor.append(amount_all)
+
+    avg = 0.000001
+    avg_all = 0.000001
+    if is_left:
+        avg = mean(LFactor)
+        avg_all = mean(LAFactor)
+    else:
+        avg = mean(RFactor)
+        avg_all = mean(RAFactor)
+
+    # single frame
+    avg = amount
+    return avg, avg_all
+
+
+def report_state(avg, avg_all, is_left, is_ready):
+    if not is_ready:
+        return
+
+    global SingleLimit
+    global MultiLimit
+
     global machine_state
     global contours_count_limit
-    pre_res = len(ans) > contours_count_limit
+    pre_res = avg >= SingleLimit or avg_all >= MultiLimit
     if not pre_res:
         machine_state.lost_detect(is_left)
     if is_left and pre_res:
@@ -396,46 +449,76 @@ def make_decision_and_report_special(image, border_contours, is_left, is_ready, 
     if not is_left and pre_res:
         machine_state.detect_on_right()
 
-    global LFactor
-    global RFactor
-    global MeanL
-    global MinSize
 
-    amount = 0.00
-    for cnt in detected:
-        (x, y), radius = cv2.minEnclosingCircle(cnt)
-        if 2*radius > MinSize:
-            amount = amount + 1
-
-    if is_left:
-        if len(LFactor) >= MeanL:
-            LFactor.pop(0)
-        LFactor.append(amount)
-    else:
-        if len(RFactor) >= MeanL:
-            RFactor.pop(0)
-        RFactor.append(amount)
-
-    global green_color
-    global red_color
-
-    avg = 0.000001
-    if is_left:
-        avg = mean(LFactor)
-    else:
-        avg = mean(RFactor)
-
+def print_tf_reports(image_for_printing, avg, avg_all, is_left):
+    label_all = "{:.3f}".format(avg_all)
     label = "OK,   "+"{:.3f}".format(avg)
     color = green_color
-    if avg > 3:
+    if avg > 0.9:
         color = red_color
         label = "BAD,  "+"{:.3f}".format(avg)
 
-    cv2.circle(image_for_printing, (700, 500), MinSize, color, -1)
-    cv2.putText(image_for_printing, label,
-                (700, 550), cv2.FONT_HERSHEY_PLAIN, 1.0, color, 2)
+    global white_color
 
+    lxpos, lypos = 140, 500
+    sz = 1.8
+
+    prolongate_red_count = 3
+
+    tl_color = get_tl_color(avg, 0.1, 0.9, is_left, prolongate_red_count)
+
+    l1 = "Big artifacts: " + "{:.3f}".format(avg)+" with minimal size:"
+    l2 = "Any artifacts: " + "{:.3f}".format(avg_all)
+
+    cv2.circle(image_for_printing, (lxpos, lypos), 30, white_color, 1)
+    cv2.circle(image_for_printing, (lxpos, lypos), 25, tl_color, -1)
+    cv2.putText(image_for_printing, l1,
+                (lxpos + 40, lypos+10), cv2.FONT_HERSHEY_PLAIN, sz, white_color, 2)
+    cv2.circle(image_for_printing, (lxpos + 630, lypos),
+               int(MinSize/2), white_color, -1)
+
+    lypos = lypos + 100
+
+    tl_color = get_tl_color(avg_all, 12, 19, is_left, 0)
+
+    cv2.circle(image_for_printing, (lxpos, lypos), 30, white_color, 1)
+    cv2.circle(image_for_printing, (lxpos, lypos), 25, tl_color, -1)
+    cv2.putText(image_for_printing, l2,
+                (lxpos + 40, lypos+10), cv2.FONT_HERSHEY_PLAIN, sz, white_color, 2)
     return image_for_printing
+
+
+Counter_left = 0
+Counter_right = 0
+
+
+def get_tl_color(input, orange_min, red_min,  is_left, prolongate_red_count):
+    global green_color
+    global orange_color
+    global red_color
+
+    global Counter_left
+    global Counter_right
+
+    if is_left:
+        if Counter_left > 0:
+            Counter_left = Counter_left - 1
+            return red_color
+    else:
+        if Counter_right > 0:
+            Counter_right = Counter_right - 1
+            return red_color
+
+    if input < orange_min:
+        return green_color
+    elif input < red_min:
+        return orange_color
+
+    if is_left:
+        Counter_left = prolongate_red_count
+    else:
+        Counter_right = prolongate_red_count
+    return red_color
 
 
 def special_final(bin_for_borders_detect, binarized, image_for_printing, is_left, is_ready):
@@ -649,13 +732,6 @@ def process_frame(frame, images, is_ready, is_left):
     return None
 
 
-screenFlipper = False
-msg = '!{0}"{1}"{2}"{3}"{4}"{5}"{6}"{7}"'
-
-message_ready = False
-message_text = ""
-
-
 def CreateMessage(state):
 
     global message_ready
@@ -665,7 +741,7 @@ def CreateMessage(state):
     errorFound = int(state.working)
     isWorking = int(state.stable)
 
-    detected = int(state.detected)
+    detected = int(state.l_detected or state.r_detected)
     if not message_ready:
         state.blink = not state.blink
         message_ready = True
@@ -708,7 +784,8 @@ def SocketCycle(conn):
     global machine_state
     global message_ready
     conn.send(CreateMessage(machine_state))
-    machine_state.detected = False
+    machine_state.l_detected = False
+    machine_state.r_detected = False
     message_ready = False
 
 
