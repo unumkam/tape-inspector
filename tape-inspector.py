@@ -30,19 +30,23 @@ addr = None
 # data
 cwd = os.getcwd()
 examples_dir = cwd + "//video//"
-left_video = examples_dir + "l_bad_new_1.wmv"
-right_video = examples_dir + "r_bad_new_0.wmv"
 
-#left_video = examples_dir + "l_bad_new_0.wmv"
-#right_video = examples_dir + "r_bad_new_0.wmv"
+LOCAL_RUN = False
 
-left_video = examples_dir + "l_good_0.wmv"
-right_video = examples_dir + "r_good_0.wmv"
+if LOCAL_RUN:
 
-ip_addr = '192.168.0.2'
-left_cam_index = left_video
-right_cam_index = right_video
-# plotting = False
+    #left_video = examples_dir + "l_bad_new_1.wmv"
+    #right_video = examples_dir + "r_bad_new_0.wmv"
+
+    #left_video = examples_dir + "l_good_0.wmv"
+    #right_video = examples_dir + "r_good_0.wmv"
+
+    left_video = examples_dir + "l_bad_new_0.wmv"
+    right_video = examples_dir + "r_bad_new_0.wmv"
+
+    ip_addr = '192.168.0.2'
+    left_cam_index = left_video
+    right_cam_index = right_video
 
 # settings
 turn_on_delay = 5
@@ -61,24 +65,16 @@ purple_color = (255, 0, 255)
 orange_color = (0, 165, 255)
 white_color = (255, 255, 255)
 blue_color = (255, 0, 0)
-std_width = 1
 
 
 # VARS
-LEFT_FILTER_X = None
-LEFT_FILTER_Y = None
+LEFT_FILTER_X, LEFT_FILTER_Y = None, None
+LEFT_ANGLE,  RIGHT_ANGLE= 1.87, -1.87
+LEFT_K, LEFT_B = None, None
 
-LEFT_ANGLE = 1.87
-RIGHT_ANGLE = -1.87
+RIGHT_FILTER_X, RIGHT_FILTER_Y = None, None
 
-LEFT_K = None
-LEFT_B = None
-
-RIGHT_FILTER_X = None
-RIGHT_FILTER_Y = None
-
-RIGHT_K = None
-RIGHT_B = None
+RIGHT_K, RIGHT_B = None, None
 
 
 LFactor = []
@@ -149,7 +145,6 @@ def add_contours(image, contours, color, width):
     img = image.copy()
     contours_count = len(contours)
     global green_color
-    global std_width
     [cv2.drawContours(img, [contours[i]], 0, color, width)
      for i in range(contours_count)]
     return img
@@ -341,7 +336,7 @@ def add_filter_lines(is_left, image_for_printing):
     line_ang = (LEFT_ANGLE, RIGHT_ANGLE)[not is_left]
 
     diff_1 = (40, -40)[not is_left]
-    diff_2 = (-90, -90)[not is_left]
+    diff_2 = (-90, 90)[not is_left]
 
     if line_filter_x is None:
         return image_for_printing
